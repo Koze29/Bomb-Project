@@ -1,232 +1,197 @@
-#################################
-# CSC 102 Defuse the Bomb Project
-# Main program
-# Team: Lucas and Kobe
-#################################
+"""Main application for CSC 102: Defuse the Bomb."""
+from tkinter import Tk, Label, LEFT
 
-# import the configs
 from bomb_configs import *
-# import the phases
-from bomb_phases import *
-import pygame
-from time import sleep  
+from bomb_phases import Lcd, Timer, Keypad, Wires, Button, Toggles
 
-# --- Audio setup ---
-pygame.mixer.init()
-
-# Load background music and explosion sound
-pygame.mixer.music.load("Bomb.mp3")  # background loop
-explosion_snd = pygame.mixer.Sound("Explosion.mp3")  # boom
-
-###########
-# functions
-###########
- 
-
-def show_next_boot_line():
-    index = getattr(gui, "_boot_index", 0)
-
-    lines = boot_text.replace("\x00", "").splitlines()
-    colors = ["red", "cyan", "yellow", "#39FF14", "orange"]  # Colors
-
-    if index < len(lines):
-        line = lines[index]
-        color = colors[index % len(colors)]
-
-        # each boot line as its own label in boot_frame
-        lbl = Label(gui.boot_frame, text=line, bg="black", fg=color,
-                    font=("Courier New", 16), justify=LEFT)
-        lbl.pack(anchor="w")
-
-        if not hasattr(gui, "boot_labels"):
-            gui.boot_labels = []
-        gui.boot_labels.append(lbl)
-
-        gui._boot_index = index + 1
-
-        gui.after(1200, show_next_boot_line)
-    else:
-       
-        # after the last boot line, set up the bomb HUD
-        gui.setup()
-        if RPi:
-            setup_phases()
-            check_phases()
+# Sound is optional. The program remains playable without pygame or audio files.
+try:
+    import pygame
+    pygame.mixer.init()
+    pygame.mixer.music.load("Bomb.mp3")
+    explosion_snd = pygame.mixer.Sound("Explosion.mp3")
+    AUDIO_ENABLED = True
+except Exception as error:
+    print(f"Audio disabled: {error}")
+    pygame = None
+    explosion_snd = None
+    AUDIO_ENABLED = False
 
 
-def bootup(n=0):
-    gui._boot_index = 0
-    show_next_boot_line()
+def stop_music():
+    if AUDIO_ENABLED:
+        try:
+            pygame.mixer.music.stop()
+        except pygame.error:
+            pass
 
 
-    # if we're animating
-   
-# sets up the phase threads
+def play_explosion():
+    if AUDIO_ENABLED:
+        try:
+            stop_music()
+            explosion_snd.play()
+        except pygame.error as error:
+            print(f"Could not play explosion sound: {error}")
+
+
 def setup_phases():
+    """Create and start the timer and four hardware phase threads."""
     global timer, keypad, wires, button, toggles
-    
-    # setup the timer thread
+
     timer = Timer(component_7seg, COUNTDOWN)
-    # bind the 7-segment display to the LCD GUI so that it can be paused/unpaused from the GUI
-    gui.setTimer(timer)
-    # setup the keypad thread
     keypad = Keypad(component_keypad, keypad_target)
-    # setup the jumper wires thread
     wires = Wires(component_wires, wires_target)
-    # setup the pushbutton thread
-    button = Button(component_button_state, component_button_RGB, button_target, button_color, timer)
-    # bind the pushbutton to the LCD GUI so that its LED can be turned off when we quit
-    gui.setButton(button)
-    # setup the toggle switches thread
+    button = Button(
+        component_button_state, component_button_RGB,
+        button_target, button_color, timer
+    )
     toggles = Toggles(component_toggles, toggles_target)
 
-    # start the phase threads
-    timer.start()
-    keypad.start()
-    wires.start()
-    button.start()
-    toggles.start()
+    gui.setTimer(timer)
+    gui.setButton(button)
+    for phase in (timer, keypad, wires, button, toggles):
+        phase.start()
 
-# checks the phase threads
-def check_phases():
-    global active_phases
-    
-    # check the timer
-     if (timer._running):
-        gui._ltimer["text"] = f"Time left: {timer}"
-    else:
-        # the countdown has expired -> explode!
-        pygame.mixer.music.stop()      # stop background music
-        explosion_snd.play()           # play explosion sound
 
-        turn_off()
-        gui.after(100, gui.conclusion, False)
+def turn_off():
+    """Stop worker threads and safely turn off hardware indicators."""
+    for phase_name in ("timer", "keypad", "wires", "button", "toggles"):
+        phase = globals().get(phase_name)
+        if phase is not None:
+            phase.stop()
+
+    if RPi:
+        try:
+            component_7seg.blink_rate = 0
+            component_7seg.fill(0)
+            for pin in button._rgb:
+                pin.value = True
+        except Exception as error:
+            print(f"Hardware shutdown warning: {error}")
+
+
+def finish_game(success):
+    global game_finished
+    if game_finished:
         return
-
-    # check the keypad
-    if (keypad._running):
-        # update the GUI
-        gui._lkeypad["text"] = f"Combination: {keypad}"
-        # the phase is defused -> stop the thread
-        if (keypad._defused):
-            keypad._running = False
-            active_phases -= 1
-        # the phase has failed -> strike
-        elif (keypad._failed):
-            strike()
-            # reset the keypad
-            keypad._failed = False
-            keypad._value = ""
-    # check the wires
-    if (wires._running):
-        # update the GUI
-        gui._lwires["text"] = f"Wires: {wires}"
-        # the phase is defused -> stop the thread
-        if (wires._defused):
-            wires._running = False
-            active_phases -= 1
-        # the phase has failed -> strike
-        elif (wires._failed):
-            strike()
-            # reset the wires
-            wires._failed = False
-    # check the button
-    if (button._running):
-        # update the GUI
-        gui._lbutton["text"] = f"Button: {button}"
-        # the phase is defused -> stop the thread
-        if (button._defused):
-            button._running = False
-            active_phases -= 1
-        # the phase has failed -> strike
-        elif (button._failed):
-            strike()
-            # reset the button
-            button._failed = False
-    # check the toggles
-    if (toggles._running):
-        # update the GUI
-        gui._ltoggles["text"] = f"Toggles: {toggles}"
-        # the phase is defused -> stop the thread
-        if (toggles._defused):
-            toggles._running = False
-            active_phases -= 1
-        # the phase has failed -> strike
-        elif (toggles._failed):
-            strike()
-            # reset the toggles
-            toggles._failed = False
-
-    # note the strikes on the GUI
-    gui._lstrikes["text"] = f"Strikes left: {strikes_left}"
-    # too many strikes -> explode!
-        if (strikes_left == 0):
-        pygame.mixer.music.stop()
-        explosion_snd.play()
-
-        turn_off()
-        gui.after(1000, gui.conclusion, False)
-        return
+    game_finished = True
+    stop_music()
+    if not success:
+        play_explosion()
+    turn_off()
+    gui.after(250, gui.conclusion, success)
 
 
-    # the bomb has been successfully defused!
-       if (active_phases == 0):
-        # bomb defused successfully: stop music, no explosion
-        pygame.mixer.music.stop()
-
-        turn_off()
-        gui.after(100, gui.conclusion, True)
-        return
-
-
-    # check the phases again after a slight delay
-    gui.after(100, check_phases)
-
-# handles a strike
 def strike():
     global strikes_left
-    
-    # note the strike
-    strikes_left -= 1
+    strikes_left = max(0, strikes_left - 1)
 
-# turns off the bomb
-def turn_off():
-    # stop all threads
-    timer._running = False
-    keypad._running = False
-    wires._running = False
-    button._running = False
-    toggles._running = False
 
-    # turn off the 7-segment display
-    component_7seg.blink_rate = 0
-    component_7seg.fill(0)
-    # turn off the pushbutton's LED
-    for pin in button._rgb:
-        pin.value = True
+def check_phases():
+    """Poll worker-thread state from Tk's main thread."""
+    global active_phases
 
-######
-# MAIN
-######
+    if game_finished:
+        return
 
-# initialize the LCD
-window = Tk()
-gui = Lcd(window)
+    if not timer._running:
+        # A just-started worker may not have entered run() yet.
+        if timer.is_alive():
+            gui.after(100, check_phases)
+            return
+        finish_game(False)
+        return
 
-# initialize the bomb strikes and active phases 
+    gui._ltimer["text"] = f"Time left: {timer}"
+    phase_widgets = (
+        (keypad, gui._lkeypad, "Combination"),
+        (wires, gui._lwires, "Wires"),
+        (button, gui._lbutton, "Button"),
+        (toggles, gui._ltoggles, "Toggles"),
+    )
+
+    for phase, widget, label in phase_widgets:
+        if not phase._running:
+            continue
+        widget["text"] = f"{label}: {phase}"
+        if phase._defused:
+            phase.stop()
+            active_phases -= 1
+        elif phase._failed:
+            strike()
+            phase._failed = False
+            if isinstance(phase, Keypad):
+                phase._value = ""
+
+    gui._lstrikes["text"] = f"Strikes left: {strikes_left}"
+
+    if strikes_left <= 0:
+        finish_game(False)
+        return
+    if active_phases <= 0:
+        finish_game(True)
+        return
+
+    gui.after(100, check_phases)
+
+
+def show_next_boot_line():
+    index = gui._boot_index
+    lines = boot_text.splitlines()
+    colors = ["red", "cyan", "yellow", "#39FF14", "orange"]
+
+    if index < len(lines):
+        Label(
+            gui.boot_frame, text=lines[index], bg="black",
+            fg=colors[index % len(colors)],
+            font=("Courier New", 16), justify=LEFT
+        ).pack(anchor="w")
+        gui._boot_index += 1
+        gui.after(700, show_next_boot_line)
+        return
+
+    gui.setup()
+    if RPi:
+        setup_phases()
+        gui.after(250, check_phases)
+    else:
+        Label(
+            gui.bomb_frame,
+            text=(
+                "Windows test mode: Raspberry Pi hardware is disabled.\n"
+                "Set RPi = True on the Raspberry Pi to use the components."
+            ),
+            bg="black", fg="yellow", font=("Courier New", 14),
+            justify=LEFT
+        ).grid(row=5, column=0, columnspan=3, sticky="w")
+
+
+def close_application(_event=None):
+    stop_music()
+    if RPi and "timer" in globals():
+        turn_off()
+    if AUDIO_ENABLED:
+        try:
+            pygame.mixer.quit()
+        except pygame.error:
+            pass
+    window.destroy()
+
+
 strikes_left = NUM_STRIKES
 active_phases = NUM_PHASES
+game_finished = False
 
-# start background music (loop forever)
-pygame.mixer.music.play(-1)
+window = Tk()
+gui = Lcd(window)
+window.bind("<Escape>", close_application)
 
-# "boot" the bomb
-gui.after(100, bootup)
+if AUDIO_ENABLED:
+    try:
+        pygame.mixer.music.play(-1)
+    except pygame.error as error:
+        print(f"Background music unavailable: {error}")
 
-# display the LCD GUI
+gui.after(100, show_next_boot_line)
 window.mainloop()
-
-
-
-
-
