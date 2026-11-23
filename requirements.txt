@@ -1,0 +1,7 @@
+# Optional audio support
+pygame
+
+# Raspberry Pi hardware dependencies (install on the Raspberry Pi only)
+adafruit-blinka
+adafruit-circuitpython-ht16k33
+adafruit-circuitpython-matrixkeypad
